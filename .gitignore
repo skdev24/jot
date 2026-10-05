@@ -1,0 +1,19 @@
+# Build output (Xcode, packaging, demo captures)
+build/
+
+# Local icon and demo tooling (kept private); the release scripts are public
+scripts/*
+!scripts/release.sh
+!scripts/package.sh
+
+# Editor dependencies
+editor/node_modules/
+
+# Xcode / SwiftPM per-user state
+xcuserdata/
+*.xcuserstate
+.swiftpm/
+
+# OS and editors
+.DS_Store
+.cursor/

@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="editor.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="top">
+      <div id="title" title="Double-click to rename">Dump</div>
+      <div id="findbar">
+        <input id="findq" type="text" placeholder="Find in note" spellcheck="false" autocomplete="off" />
+        <span id="findcount"></span>
+        <button type="button" id="findprev" class="icon" title="Previous  ⇧↵"></button>
+        <button type="button" id="findnext" class="icon" title="Next  ↵"></button>
+        <button type="button" id="findclose" class="icon" title="Close  esc"></button>
+      </div>
+      <div id="toast" role="status" aria-live="polite"></div>
+      <div class="actions">
+        <button type="button" id="searchbtn" class="icon" title="Search notes  ⌘P"></button>
+        <button type="button" id="morebtn" class="icon" title="More"></button>
+      </div>
+    </header>
+    <main id="scroller">
+      <div id="editor"></div>
+    </main>
+  </div>
+  <script src="editor.js"></script>
+</body>
+</html>

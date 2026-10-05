@@ -1,0 +1,219 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Pinned Sparkle CLI tools (sign_update, generate_appcast).
+  SPARKLE_VERSION: "2.10.0"
+  SPARKLE_SHA256: "c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c"
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Optional: pin Xcode via repo variable XCODE_VERSION (e.g. 26.4).
+      - name: Select Xcode
+        if: vars.XCODE_VERSION != ''
+        run: sudo xcode-select -s "/Applications/Xcode_${{ vars.XCODE_VERSION }}.app"
+
+      - name: Tag matches Info.plist
+        run: |
+          plist="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Jot/Info.plist)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$plist" != "$tag" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} != CFBundleShortVersionString ${plist} in Jot/Info.plist"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: editor/package-lock.json
+
+      - name: Editor bundle is current
+        run: |
+          cd editor && npm ci && npm test && npm run build && cd ..
+          if ! git diff --exit-code --stat -- Jot/Editor/Web || [ -n "$(git status --porcelain -- Jot/Editor/Web)" ]; then
+            echo "::error file=Jot/Editor/Web::Stale editor bundle. Run \`cd editor && npm run build\`, commit, and re-tag."
+            exit 1
+          fi
+
+      # Forks without secrets still get an (unsigned) release.
+      - name: Detect signing secrets
+        id: mode
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          signed=true
+          for v in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_API_KEY; do
+            if [ -z "${!v}" ]; then echo "::warning::secret $v not set"; signed=false; fi
+          done
+          sparkle=false
+          if [ "$signed" = true ] && [ -n "$SPARKLE_PRIVATE_KEY" ]; then sparkle=true; fi
+          if [ "$signed" = true ] && [ "$sparkle" = false ]; then
+            echo "::warning::SPARKLE_PRIVATE_KEY not set; no appcast.xml (in-app updates won't see this release)"
+          fi
+          [ "$signed" = true ] || echo "::warning::Signing secrets missing; building UNSIGNED release"
+          echo "signed=$signed" >> "$GITHUB_OUTPUT"
+          echo "sparkle=$sparkle" >> "$GITHUB_OUTPUT"
+
+      - name: Import Developer ID certificate
+        id: cert
+        if: steps.mode.outputs.signed == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+        run: |
+          keychain="$RUNNER_TEMP/jot-signing.keychain-db"
+          kc_pass="$(openssl rand -base64 32)"
+          echo "::add-mask::$kc_pass"
+          p12="$RUNNER_TEMP/cert.p12"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$p12"
+
+          security create-keychain -p "$kc_pass" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$kc_pass" "$keychain"
+          security import "$p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -f pkcs12 \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$p12"
+
+          # Intermediate CA, in case the p12 lacks it.
+          curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain" || true
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kc_pass" "$keychain" >/dev/null
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          identity="$DEVELOPER_ID_APPLICATION"
+          if [ -z "$identity" ]; then
+            identity="$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application/ {print $2; exit}')"
+          fi
+          if [ -z "$identity" ]; then
+            echo "::error::No 'Developer ID Application' identity in MACOS_CERTIFICATE"
+            security find-identity -v -p codesigning "$keychain"
+            exit 1
+          fi
+          echo "Using: $identity"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+
+      - name: Write App Store Connect API key
+        if: steps.mode.outputs.signed == 'true'
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          key="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          # Accept raw .p8 contents or base64 of it.
+          if printf '%s' "$APPLE_API_KEY" | grep -q 'BEGIN PRIVATE KEY'; then
+            printf '%s\n' "$APPLE_API_KEY" > "$key"
+          else
+            printf '%s' "$APPLE_API_KEY" | base64 --decode > "$key"
+          fi
+          chmod 600 "$key"
+          echo "APPLE_API_KEY_PATH=$key" >> "$GITHUB_ENV"
+
+      - name: Fetch Sparkle tools
+        if: steps.mode.outputs.sparkle == 'true'
+        run: |
+          tarball="$RUNNER_TEMP/Sparkle.tar.xz"
+          curl -fsSL -o "$tarball" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
+          echo "${SPARKLE_SHA256}  ${tarball}" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xJf "$tarball" -C "$RUNNER_TEMP/sparkle"
+          echo "SPARKLE_BIN=$RUNNER_TEMP/sparkle/bin" >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize
+        id: release
+        env:
+          DEVELOPER_ID_APPLICATION: ${{ steps.cert.outputs.identity }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          SPARKLE_PRIVATE_KEY: ${{ steps.mode.outputs.sparkle == 'true' && secrets.SPARKLE_PRIVATE_KEY || '' }}
+          JOT_REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ steps.mode.outputs.signed }}" = true ]; then
+            scripts/release.sh --dmg
+          else
+            scripts/release.sh --unsigned
+          fi
+
+      - name: Release notes
+        env:
+          SIGNED: ${{ steps.mode.outputs.signed }}
+          VERSION: ${{ steps.release.outputs.version }}
+          ZIP_SHA: ${{ steps.release.outputs.zip_sha256 }}
+        run: |
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            if [ "$SIGNED" != true ]; then
+              echo "> [!WARNING]"
+              echo "> **Unsigned build.** This release is ad-hoc signed and not notarized, so Gatekeeper will block it."
+              echo "> After moving Jot to Applications, allow it in System Settings > Privacy & Security > Open Anyway,"
+              echo "> or run: \`xattr -dr com.apple.quarantine /Applications/Jot.app\`"
+              echo
+            fi
+            echo "**Jot-${VERSION}.zip** sha256: \`${ZIP_SHA}\`"
+            echo
+          } > "$notes"
+          cat "$notes"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          body_path: ${{ runner.temp }}/notes.md
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            build/dist/Jot-*.zip
+            build/dist/Jot-*.dmg
+            build/dist/appcast.xml
+            build/dist/SHA256SUMS
+
+      - name: Cask stanza
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          ZIP_SHA: ${{ steps.release.outputs.zip_sha256 }}
+          REPO: ${{ github.repository }}
+        run: |
+          stanza="$(cat <<EOF
+            version "${VERSION}"
+            sha256 "${ZIP_SHA}"
+
+            url "https://github.com/${REPO}/releases/download/v#{version}/Jot-#{version}.zip"
+          EOF
+          )"
+          echo "$stanza"
+          {
+            echo "### Homebrew cask (Casks/jot.rb in the tap)"
+            echo '```ruby'
+            echo "$stanza"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          kc="${{ steps.cert.outputs.keychain }}"
+          [ -n "$kc" ] && security delete-keychain "$kc" || true
+          rm -f "$RUNNER_TEMP"/AuthKey_*.p8 "$RUNNER_TEMP/cert.p12"

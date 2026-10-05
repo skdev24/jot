@@ -1,0 +1,22 @@
+name: Idea
+description: Something that would make Jot better day to day.
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, not the solution. "I keep losing links I paste…" is more useful than "add a links panel".
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Fit
+      options:
+        - label: It keeps notes as plain Markdown files.
+        - label: It works without an account or a network connection.

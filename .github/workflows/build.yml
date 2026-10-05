@@ -1,0 +1,94 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  editor:
+    name: Editor (test + bundle check)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editor
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: editor/package-lock.json
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+      # The app ships the committed bundle; it must match the sources.
+      - name: Check committed bundle is current
+        working-directory: .
+        run: |
+          if ! git diff --exit-code --stat -- Jot/Editor/Web; then
+            echo "::error file=Jot/Editor/Web::The editor bundle in Jot/Editor/Web is stale. Run \`cd editor && npm run build\` and commit the bundle."
+            exit 1
+          fi
+          if [ -n "$(git status --porcelain -- Jot/Editor/Web)" ]; then
+            echo "::error file=Jot/Editor/Web::The editor bundle in Jot/Editor/Web is not committed. Run \`cd editor && npm run build\` and commit the bundle."
+            exit 1
+          fi
+
+  app:
+    name: App (build + test, unsigned)
+    runs-on: macos-26
+    env:
+      DERIVED: ${{ github.workspace }}/build/derived
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Optional: pin Xcode via repo variable XCODE_VERSION (e.g. 26.4).
+      - name: Select Xcode
+        if: vars.XCODE_VERSION != ''
+        run: sudo xcode-select -s "/Applications/Xcode_${{ vars.XCODE_VERSION }}.app"
+
+      - run: xcodebuild -version
+
+      - name: Cache SPM packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/derived/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('Jot.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Build (universal Release)
+        run: |
+          xcodebuild \
+            -project Jot.xcodeproj \
+            -scheme Jot \
+            -configuration Release \
+            -derivedDataPath "$DERIVED" \
+            -destination 'generic/platform=macOS' \
+            ARCHS='arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGN_IDENTITY='-' \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Test
+        run: |
+          xcodebuild \
+            -project Jot.xcodeproj \
+            -scheme Jot \
+            -derivedDataPath "$DERIVED" \
+            -destination 'platform=macOS' \
+            CODE_SIGN_IDENTITY='-' \
+            CODE_SIGNING_REQUIRED=NO \
+            test

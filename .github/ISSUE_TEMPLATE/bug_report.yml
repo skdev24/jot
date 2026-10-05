@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in Jot doesn't work the way it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead. A screenshot or screen recording helps a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the island with ⌃⌥Space
+        2. Type …
+        3. …
+  - type: input
+    id: version
+    attributes:
+      label: Jot version
+      description: Settings → About
+      placeholder: "2.0 (4)"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac
+      placeholder: "macOS 26.0, MacBook Pro 14-inch (M3)"
+    validations:
+      required: true
+  - type: dropdown
+    id: displays
+    attributes:
+      label: Displays
+      options:
+        - Built-in only
+        - Built-in + external
+        - External only (lid closed)
+  - type: textarea
+    id: note
+    attributes:
+      label: The Markdown involved (optional)
+      description: If a note looks or saves wrong, paste the relevant lines of the .md file. Remove anything private.
+      render: markdown
