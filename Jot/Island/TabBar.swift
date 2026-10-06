@@ -73,6 +73,11 @@ struct TabBar: View {
             guard dragging == nil else { return }
             withAnimation(spring) { order = ids }
         }
+        // Clicking another tab doesn't take focus from the rename field, so
+        // its blur never fires; switching tabs ends the rename instead.
+        .onChange(of: activeID) { _, id in
+            if let renaming, renaming != id { finishRename(renaming, commit: true) }
+        }
         .animation(spring, value: activeID)
     }
 

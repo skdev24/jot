@@ -504,6 +504,19 @@ final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    /// A hover-opened island isn't key yet, and AppKit spends the first click
+    /// on making it key unless the view under the pointer accepts first mouse.
+    /// The tabs sit in a SwiftUI ScrollView (an NSScrollView inside) that
+    /// doesn't, so becoming key here first lets that click land.
+    override func sendEvent(_ event: NSEvent) {
+        if isKeyWindow == false, chrome.expanded,
+           [.leftMouseDown, .rightMouseDown].contains(event.type),
+           chrome.hitTest(chrome.convert(event.locationInWindow, from: nil)) != nil {
+            makeKey()
+        }
+        super.sendEvent(event)
+    }
+
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 360),
