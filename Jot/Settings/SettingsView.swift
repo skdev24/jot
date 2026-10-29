@@ -161,10 +161,13 @@ private struct PaneHeader: View {
 
 // MARK: - Building blocks
 
-/// A rounded group of rows with hairline separators.
+/// A rounded group of rows with hairline separators. Unboxed for content
+/// that brings its own tiles (like the display and icon choices), so they
+/// aren't boxes inside a box.
 private struct Card<Content: View>: View {
     var title: String?
     var footer: String?
+    var boxed = true
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -176,16 +179,20 @@ private struct Card<Content: View>: View {
                     .foregroundStyle(.secondary)
                     .padding(.leading, 4)
             }
-            VStack(spacing: 0) { content }
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(nsColor: .controlBackgroundColor))
-                        .shadow(color: .black.opacity(0.04), radius: 1, y: 1)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08))
-                )
+            if boxed {
+                VStack(spacing: 0) { content }
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(nsColor: .controlBackgroundColor))
+                            .shadow(color: .black.opacity(0.04), radius: 1, y: 1)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08))
+                    )
+            } else {
+                content
+            }
             if let footer {
                 Text(footer)
                     .font(.system(size: 11.5))
@@ -280,14 +287,13 @@ private struct GeneralPane: View {
             }
         }
 
-        Card(title: "Display", footer: "With more than one display, choose where the island appears.") {
+        Card(title: "Display", footer: "With more than one display, choose where the island appears.", boxed: false) {
             HStack(spacing: 12) {
                 ForEach(DisplayMode.allCases) { mode in
                     DisplayChoice(mode: mode, selected: display == mode.rawValue)
                         .onTapGesture { display = mode.rawValue }
                 }
             }
-            .padding(12)
         }
 
         Card(title: "Text") {
@@ -308,7 +314,7 @@ private struct GeneralPane: View {
 
         Card(title: "App icon", footer: iconFailed
             ? "Jot can't change its own icon here. Move Jot.app to a folder you can write to, like Applications, and try again."
-            : "Shown in Finder, the Dock and Launchpad.") {
+            : "Shown in Finder, the Dock and Launchpad.", boxed: false) {
             HStack(spacing: 12) {
                 ForEach(AppIconStyle.allCases) { style in
                     IconChoice(style: style, selected: appIcon == style.rawValue)
@@ -319,7 +325,6 @@ private struct GeneralPane: View {
                         }
                 }
             }
-            .padding(12)
         }
 
         Card {
@@ -354,13 +359,15 @@ private struct DisplayChoice: View {
                     .font(.system(size: 12.5, weight: .semibold))
                 Text(mode == .followMouse ? "Opens on whichever display you hover" : "Ignores external displays")
                     .font(.system(size: 11)).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
+            .padding(.horizontal, 12)
         }
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(selected ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.025))
+                .fill(selected ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -410,7 +417,7 @@ private struct IconChoice: View {
         .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(selected ? Color.accentColor.opacity(0.08) : Color.primary.opacity(0.025))
+                .fill(selected ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

@@ -44,7 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func openSettings() {
         let window = settingsWindow ?? {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView().environment(store)))
+            let host = NSHostingController(rootView: SettingsView().environment(store))
+            // The view runs under the transparent title bar. With the title
+            // bar's safe area, the window grew by its height and left a blank
+            // band along the bottom.
+            host.safeAreaRegions = []
+            let window = NSWindow(contentViewController: host)
             window.title = "Jot Settings"
             window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
             window.titlebarAppearsTransparent = true
