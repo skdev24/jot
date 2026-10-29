@@ -6,20 +6,23 @@ import KeyboardShortcuts
 enum Prefs {
     static let vaultPath = "vaultPath"
     static let fontSize = "fontSize"
-    static let openOnHover = "openOnHover"
-    static let hoverDelay = "hoverDelay"
-    static let display = "display"
+    /// An `OpenTrigger`.
+    static let openTrigger = "openTrigger"
+    /// Seconds the pointer rests on the notch before it opens.
+    static let hoverWait = "hoverWait"
+    /// UUIDs of displays the island stays off.
+    static let disabledDisplays = "disabledDisplays"
     static let showDueBadge = "showDueBadge"
     static let reminders = "reminders"
     static let reminderHour = "reminderHour"
     static let appIcon = "appIcon"
 
     static func register() {
+        migrate()
         UserDefaults.standard.register(defaults: [
             fontSize: 15.0,
-            openOnHover: true,
-            hoverDelay: 0.08,
-            display: DisplayMode.followMouse.rawValue,
+            openTrigger: OpenTrigger.rest.rawValue,
+            hoverWait: 0.5,
             showDueBadge: true,
             reminders: true,
             reminderHour: 9,
@@ -28,20 +31,17 @@ enum Prefs {
     }
 
     static var defaults: UserDefaults { .standard }
-}
 
-/// Which display the island opens on.
-enum DisplayMode: String, CaseIterable, Identifiable {
-    case followMouse
-    case builtIn
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .followMouse: "The display with the pointer"
-        case .builtIn: "Only the built-in display"
+    /// Jot 2.0 had an on/off switch and an instant-to-long delay for hover.
+    /// Hover switched off carries over; the old delays don't map onto
+    /// resting, so they start from the new default.
+    private static func migrate() {
+        let d = UserDefaults.standard
+        if d.object(forKey: "openOnHover") != nil, d.object(forKey: openTrigger) == nil, d.bool(forKey: "openOnHover") == false {
+            d.set(OpenTrigger.off.rawValue, forKey: openTrigger)
         }
+        d.removeObject(forKey: "openOnHover")
+        d.removeObject(forKey: "hoverDelay")
     }
 }
 

@@ -59,7 +59,12 @@ final class NotchController: NSObject {
     private var screen: NSScreen?
     private var monitors: [Any] = []
     private var poll: Timer?
+    /// When a drag held over the notch opens it.
     private var openAfter: Date?
+    private var intent = HoverIntent()
+    /// Displays the island may use; refreshed when displays or settings
+    /// change, since hover checks run on every pointer move.
+    private var allowedIDs = Displays.allowedIDs
     private var hideAfter: Date?
     private var ignoreResignUntil: Date?
     private var opening = false
@@ -99,8 +104,9 @@ final class NotchController: NSObject {
             Task { @MainActor in
                 guard let self else { return }
                 // Screen objects are rebuilt when displays change; keep ours only if it's still attached.
-                let id = self.screen.flatMap(Self.displayID)
-                self.screen = NSScreen.screens.first { Self.displayID($0) == id }
+                let id = self.screen.flatMap(Displays.displayID)
+                self.screen = NSScreen.screens.first { Displays.displayID($0) == id }
+                self.allowedIDs = Displays.allowedIDs
                 self.place()
                 self.showRestingBadge()
             }
@@ -313,21 +319,29 @@ final class NotchController: NSObject {
 
     private func listen() {
         let moved: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]
-        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: moved, handler: { [weak self] _ in
-            Task { @MainActor in self?.tick() }
+        // deltaY grows downward, and keeps reporting motion at the top edge
+        // where the pointer itself can't move any more.
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: moved, handler: { [weak self] event in
+            let upward = -event.deltaY
+            Task { @MainActor in self?.tick(upward: upward) }
         }) { monitors.append(monitor) }
         if let monitor = NSEvent.addLocalMonitorForEvents(matching: moved, handler: { [weak self] event in
-            self?.tick()
+            self?.tick(upward: -event.deltaY)
             return event
         }) { monitors.append(monitor) }
-        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] event in
+            let left = event.type == .leftMouseDown
             Task { @MainActor in
                 self?.dragChangeCount = NSPasteboard(name: .drag).changeCount
                 self?.closeIfMouseOutside()
+                if left { self?.openIfNotchClicked() }
             }
         }) { monitors.append(monitor) }
         if let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] event in
-            if let self, event.window !== self.panel, self.state.expanded { self.collapse() }
+            guard let self else { return event }
+            if event.window !== self.panel, self.state.expanded { self.collapse() }
+            // The closed island's due badge can take a click on the notch.
+            if event.window === self.panel, event.type == .leftMouseDown { self.openIfNotchClicked() }
             return event
         }) { monitors.append(monitor) }
         poll = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
@@ -340,26 +354,17 @@ final class NotchController: NSObject {
         NSEvent.pressedMouseButtons & 1 == 1 && NSPasteboard(name: .drag).changeCount != dragChangeCount
     }
 
-    private func tick() {
+    private func tick(upward: CGFloat = 0) {
         let mouse = NSEvent.mouseLocation
-        let showing = state.expanded || opening
-        guard let screen = (showing ? screen : nil) ?? preferredScreen(forPointer: true) else { return }
-        let notch = NotchGeo.compact(on: screen).insetBy(dx: -20, dy: -10)
-        let keep = showing ? panel.frame.insetBy(dx: -12, dy: -12).union(notch) : notch
         let now = Date()
-        if keep.contains(mouse) {
+        guard state.expanded || opening, let screen else {
+            return considerOpening(mouse: mouse, upward: upward, now: now)
+        }
+        let notch = NotchGeo.compact(on: screen).insetBy(dx: -20, dy: -10)
+        if panel.frame.insetBy(dx: -12, dy: -12).union(notch).contains(mouse) {
             hideAfter = nil
-            // Dragging something onto the notch always opens it, so it can be dropped.
-            let hoverOpens = Prefs.defaults.bool(forKey: Prefs.openOnHover) || isDragging
-            if state.expanded == false, opening == false, hoverOpens {
-                let delay = isDragging ? 0.12 : Prefs.defaults.double(forKey: Prefs.hoverDelay)
-                if openAfter == nil { openAfter = now.addingTimeInterval(delay) }
-                if now >= (openAfter ?? .distantFuture) { expand(on: screen) }
-            }
             return
         }
-        openAfter = nil
-        guard showing else { return }
         // Peeking closes when the pointer leaves. Once you're typing (the panel
         // is key) or opened it with the shortcut, it stays until you click away.
         if pinned || panel.isKeyWindow || isDragging {
@@ -368,6 +373,51 @@ final class NotchController: NSObject {
         }
         if hideAfter == nil { hideAfter = now.addingTimeInterval(0.28) }
         if now >= (hideAfter ?? .distantFuture) { collapse() }
+    }
+
+    /// The island is closed: is the pointer asking for it?
+    private func considerOpening(mouse: NSPoint, upward: CGFloat, now: Date) {
+        guard let screen = activeScreen, allows(screen) else {
+            openAfter = nil
+            return intent.leave()
+        }
+        let compact = NotchGeo.compact(on: screen)
+        // Dragging something onto the notch always opens it, so it can be dropped.
+        if isDragging {
+            guard compact.insetBy(dx: -20, dy: -10).contains(mouse) else {
+                openAfter = nil
+                return
+            }
+            if openAfter == nil { openAfter = now.addingTimeInterval(0.12) }
+            if now >= (openAfter ?? .distantFuture) { expand(on: screen) }
+            return
+        }
+        openAfter = nil
+        let open = intent.sample(
+            at: mouse,
+            inZone: Self.openZone(compact).contains(mouse),
+            atTopEdge: mouse.y >= screen.frame.maxY - 1,
+            upward: upward,
+            buttonsDown: NSEvent.pressedMouseButtons != 0,
+            trigger: OpenTrigger.current,
+            wait: Prefs.defaults.double(forKey: Prefs.hoverWait),
+            now: now
+        )
+        if open { expand(on: screen) }
+    }
+
+    /// Where the pointer has to be to open the island: the notch itself
+    /// (or the same spot in the menu bar), not the space below it, where
+    /// tabs and toolbars are. One point taller so the top row counts.
+    private static func openZone(_ compact: NSRect) -> NSRect {
+        NSRect(x: compact.minX - 8, y: compact.minY, width: compact.width + 16, height: compact.height + 1)
+    }
+
+    private func openIfNotchClicked() {
+        guard OpenTrigger.current == .click, state.expanded == false, opening == false,
+              let screen = activeScreen, allows(screen),
+              Self.openZone(NotchGeo.compact(on: screen)).contains(NSEvent.mouseLocation) else { return }
+        expand(on: screen)
     }
 
     private func closeIfMouseOutside() {
@@ -434,6 +484,7 @@ final class NotchController: NSObject {
         hideAfter = nil
         opening = false
         pinned = false
+        intent.disarm()
         bridge.flush()
         withAnimation(.spring(response: 0.28, dampingFraction: 0.94)) {
             state.expanded = false
@@ -470,23 +521,25 @@ final class NotchController: NSObject {
 
     private func preferencesChanged() {
         bridge.setPrefs(fontSize: Prefs.defaults.double(forKey: Prefs.fontSize))
+        allowedIDs = Displays.allowedIDs
+        if state.expanded, let screen, allows(screen) == false { collapse() }
         updateDue()
     }
 
     // MARK: Screens
 
-    /// Where the island goes: the display under the pointer, or only the
-    /// built-in (notched) one if that's the setting.
+    /// Where the island goes: the display under the pointer if the island
+    /// is on there, otherwise the notched one, the main one, or any that's on.
     private func preferredScreen(forPointer: Bool) -> NSScreen? {
-        let builtIn = NSScreen.screens.first(where: NotchGeo.hasNotch)
-        if DisplayMode(rawValue: Prefs.defaults.string(forKey: Prefs.display) ?? "") == .builtIn {
-            return builtIn ?? NSScreen.main
-        }
-        return forPointer ? activeScreen : (builtIn ?? NSScreen.main)
+        let allowed = NSScreen.screens.filter(allows)
+        if forPointer, let under = activeScreen, allows(under) { return under }
+        return allowed.first(where: NotchGeo.hasNotch)
+            ?? allowed.first { Displays.displayID($0) == NSScreen.main.flatMap(Displays.displayID) }
+            ?? allowed.first
     }
 
-    private static func displayID(_ screen: NSScreen) -> CGDirectDisplayID? {
-        screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+    private func allows(_ screen: NSScreen) -> Bool {
+        Displays.displayID(screen).map(allowedIDs.contains) ?? false
     }
 
     /// The display under the pointer. Includes the top edge row (y == maxY),

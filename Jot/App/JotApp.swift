@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil { return }
         NSApp.setActivationPolicy(.accessory)
         Prefs.register()
+        Displays.migrate()
         AppIconStyle.restore()
         _ = Updater.shared
         try? store.start()

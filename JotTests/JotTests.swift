@@ -110,3 +110,86 @@ final class ReminderScannerTests: XCTestCase {
         XCTAssertTrue(reminder.identifier.hasPrefix("jot."))
     }
 }
+
+final class HoverIntentTests: XCTestCase {
+    private let start = Date(timeIntervalSinceReferenceDate: 0)
+    private let notch = CGPoint(x: 100, y: 900)
+
+    private func sample(
+        _ intent: inout HoverIntent,
+        at point: CGPoint? = nil,
+        after seconds: TimeInterval,
+        inZone: Bool = true,
+        atTopEdge: Bool = false,
+        upward: CGFloat = 0,
+        buttonsDown: Bool = false,
+        trigger: OpenTrigger = .rest
+    ) -> Bool {
+        intent.sample(
+            at: point ?? notch, inZone: inZone, atTopEdge: atTopEdge, upward: upward,
+            buttonsDown: buttonsDown, trigger: trigger, wait: 0.5, now: start.addingTimeInterval(seconds)
+        )
+    }
+
+    func testOpensOnceThePointerRests() {
+        var intent = HoverIntent()
+        XCTAssertFalse(sample(&intent, after: 0))
+        XCTAssertFalse(sample(&intent, at: CGPoint(x: 103, y: 901), after: 0.3), "small jitter still counts as resting")
+        XCTAssertTrue(sample(&intent, after: 0.5))
+    }
+
+    func testPassingAcrossNeverOpens() {
+        var intent = HoverIntent()
+        for step in 0..<20 {
+            let point = CGPoint(x: 20 + CGFloat(step) * 12, y: 900)
+            XCTAssertFalse(sample(&intent, at: point, after: Double(step) * 0.05))
+        }
+    }
+
+    func testPushingIntoTheEdgeOpensRightAway() {
+        var intent = HoverIntent()
+        XCTAssertFalse(sample(&intent, after: 0, atTopEdge: true, upward: 30, trigger: .push), "the move that reaches the edge doesn't count")
+        XCTAssertFalse(sample(&intent, at: CGPoint(x: 112, y: 900), after: 0.05, atTopEdge: true, upward: 25, trigger: .push))
+        XCTAssertTrue(sample(&intent, at: CGPoint(x: 124, y: 900), after: 0.1, atTopEdge: true, upward: 25, trigger: .push), "drifting sideways keeps the push")
+    }
+
+    func testPushModeIgnoresResting() {
+        var intent = HoverIntent()
+        XCTAssertFalse(sample(&intent, after: 0, trigger: .push))
+        XCTAssertFalse(sample(&intent, after: 3, trigger: .push))
+    }
+
+    func testSlowNudgesDontAddUp() {
+        var intent = HoverIntent()
+        _ = sample(&intent, after: 0, atTopEdge: true, trigger: .push)
+        for step in 1...6 {
+            XCTAssertFalse(sample(&intent, after: Double(step) * 0.5, atTopEdge: true, upward: 20, trigger: .push))
+        }
+    }
+
+    func testHeldButtonIsNotAReach() {
+        var intent = HoverIntent()
+        XCTAssertFalse(sample(&intent, after: 0, buttonsDown: true))
+        XCTAssertFalse(sample(&intent, after: 1, buttonsDown: true))
+        XCTAssertFalse(sample(&intent, after: 1.2), "resting starts once the button is up")
+        XCTAssertTrue(sample(&intent, after: 1.7))
+    }
+
+    func testClosingWaitsForThePointerToLeave() {
+        var intent = HoverIntent()
+        intent.disarm()
+        XCTAssertFalse(sample(&intent, after: 0))
+        XCTAssertFalse(sample(&intent, after: 2), "still over the notch after it closed")
+        XCTAssertFalse(sample(&intent, after: 2.1, inZone: false))
+        XCTAssertFalse(sample(&intent, after: 2.2))
+        XCTAssertTrue(sample(&intent, after: 2.7))
+    }
+
+    func testClickAndOffNeverOpenOnHover() {
+        for trigger in [OpenTrigger.click, .off] {
+            var intent = HoverIntent()
+            XCTAssertFalse(sample(&intent, after: 0, trigger: trigger))
+            XCTAssertFalse(sample(&intent, after: 5, atTopEdge: true, upward: 200, trigger: trigger))
+        }
+    }
+}

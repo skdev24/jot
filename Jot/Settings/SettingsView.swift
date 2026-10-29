@@ -261,40 +261,52 @@ enum AppInfo {
 // MARK: - General
 
 private struct GeneralPane: View {
-    @AppStorage(Prefs.openOnHover) private var openOnHover = true
-    @AppStorage(Prefs.hoverDelay) private var hoverDelay = 0.08
-    @AppStorage(Prefs.display) private var display = DisplayMode.followMouse.rawValue
+    @AppStorage(Prefs.openTrigger) private var trigger = OpenTrigger.rest
+    @AppStorage(Prefs.hoverWait) private var hoverWait = 0.5
     @AppStorage(Prefs.fontSize) private var fontSize = 15.0
     @AppStorage(Prefs.appIcon) private var appIcon = AppIconStyle.note.rawValue
     @State private var iconFailed = false
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
+    private var triggerDetail: String {
+        switch trigger {
+        case .rest: "Stop the pointer on the notch. Moving across it doesn't count."
+        case .push: "Push the pointer up into the notch, the way you'd reveal a hidden Dock."
+        case .click: "Click the notch."
+        case .off: "Only the shortcut opens it."
+        }
+    }
+
     var body: some View {
-        Card(title: "Opening") {
-            Row(title: "Open when the pointer touches the notch", detail: "Otherwise, open it with the shortcut.") {
-                Toggle("", isOn: $openOnHover).toggleStyle(.switch).labelsHidden().controlSize(.small)
-            }
-            Row(title: "Hover delay", divider: false) {
-                Picker("", selection: $hoverDelay) {
-                    Text("Instant").tag(0.08)
-                    Text("Short").tag(0.25)
-                    Text("Long").tag(0.6)
+        Card(title: "Opening", footer: "The shortcut always opens it, and so does dragging a file onto the notch.") {
+            Row(title: "Open with the pointer", detail: triggerDetail, divider: trigger == .rest) {
+                Picker("", selection: $trigger) {
+                    Text("Rest").tag(OpenTrigger.rest)
+                    Text("Push").tag(OpenTrigger.push)
+                    Text("Click").tag(OpenTrigger.click)
+                    Text("Off").tag(OpenTrigger.off)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 200)
-                .disabled(openOnHover == false)
+                .frame(width: 210)
             }
-        }
-
-        Card(title: "Display", footer: "With more than one display, choose where the island appears.", boxed: false) {
-            HStack(spacing: 12) {
-                ForEach(DisplayMode.allCases) { mode in
-                    DisplayChoice(mode: mode, selected: display == mode.rawValue)
-                        .onTapGesture { display = mode.rawValue }
+            if trigger == .rest {
+                Row(title: "Rest for", detail: "Pushing up into the notch opens it right away.", divider: false) {
+                    Picker("", selection: $hoverWait) {
+                        Text("¼ s").tag(0.25)
+                        Text("½ s").tag(0.5)
+                        Text("1 s").tag(1.0)
+                        Text("2 s").tag(2.0)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 210)
                 }
             }
         }
+        .animation(.easeOut(duration: 0.15), value: trigger)
+
+        DisplaysCard()
 
         Card(title: "Text") {
             VStack(alignment: .leading, spacing: 12) {
@@ -342,61 +354,139 @@ private struct GeneralPane: View {
     }
 }
 
-/// A tiny drawing of where the island will appear.
-private struct DisplayChoice: View {
-    var mode: DisplayMode
-    var selected: Bool
+/// Every connected display, laid out the way they're arranged in System
+/// Settings; click one to turn the island on or off there.
+private struct DisplaysCard: View {
+    @State private var displays: [DisplayInfo] = DisplayInfo.connected()
+
+    private var onCount: Int { displays.filter(\.on).count }
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(alignment: .bottom, spacing: 8) {
-                screen(notch: true, island: true)
-                screen(notch: false, island: mode == .followMouse)
+        Card(title: "Displays", footer: footer) {
+            DisplayMap(displays: displays) { display in
+                guard let key = display.key, display.on == false || onCount > 1 else { return }
+                Displays.set(key, on: display.on == false)
+                displays = DisplayInfo.connected()
             }
-            .frame(height: 64)
-            VStack(spacing: 2) {
-                Text(mode == .followMouse ? "Follow the pointer" : "Built-in display only")
-                    .font(.system(size: 12.5, weight: .semibold))
-                Text(mode == .followMouse ? "Opens on whichever display you hover" : "Ignores external displays")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(.horizontal, 12)
+            .padding(16)
         }
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(selected ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(selected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1)
-        )
-        .contentShape(Rectangle())
-        .animation(.easeOut(duration: 0.15), value: selected)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            displays = DisplayInfo.connected()
+        }
     }
 
-    private func screen(notch: Bool, island: Bool) -> some View {
-        ZStack(alignment: .top) {
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                .fill(LinearGradient(colors: [Color(red: 0.55, green: 0.6, blue: 0.95), Color(red: 0.85, green: 0.5, blue: 0.6)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            if island {
-                UnevenRoundedRectangle(bottomLeadingRadius: 5, bottomTrailingRadius: 5)
-                    .fill(.black)
-                    .frame(width: 40, height: 24)
-            } else if notch {
-                UnevenRoundedRectangle(bottomLeadingRadius: 2, bottomTrailingRadius: 2)
-                    .fill(.black)
-                    .frame(width: 14, height: 4)
-            }
-        }
-        .frame(width: notch ? 76 : 90, height: notch ? 50 : 60)
-        .opacity(island ? 1 : 0.55)
+    private var footer: String {
+        displays.count < 2
+            ? "Connect another display to choose which ones show the island."
+            : "Click a display to turn the island on or off there. If the pointer is on one that's off, the shortcut opens the island on one that's on."
     }
 }
 
-/// One app icon style, picked like a display mode.
+private struct DisplayInfo: Identifiable, Equatable {
+    var id: String
+    var key: String?
+    var name: String
+    var notch: Bool
+    var frame: CGRect
+    var on: Bool
+
+    static func connected() -> [DisplayInfo] {
+        let allowed = Displays.allowedIDs
+        return NSScreen.screens.enumerated().map { index, screen in
+            let key = Displays.key(screen)
+            return DisplayInfo(
+                id: key ?? "screen-\(index)",
+                key: key,
+                name: Displays.isBuiltIn(screen) ? "Built-in" : screen.localizedName,
+                notch: NotchGeo.hasNotch(screen),
+                frame: screen.frame,
+                on: Displays.displayID(screen).map(allowed.contains) ?? false
+            )
+        }
+    }
+}
+
+/// The displays scaled into one picture, like the arrangement in System
+/// Settings → Displays.
+private struct DisplayMap: View {
+    var displays: [DisplayInfo]
+    var toggle: (DisplayInfo) -> Void
+    private let maxSize = CGSize(width: 520, height: 150)
+
+    var body: some View {
+        let bounds = displays.map(\.frame).reduce(CGRect.null) { $0.union($1) }
+        let scale = min(maxSize.width / max(bounds.width, 1), maxSize.height / max(bounds.height, 1))
+        ZStack(alignment: .topLeading) {
+            ForEach(displays) { display in
+                // Screen coordinates grow upward; the picture's grow downward.
+                let rect = CGRect(
+                    x: (display.frame.minX - bounds.minX) * scale,
+                    y: (bounds.maxY - display.frame.maxY) * scale,
+                    width: display.frame.width * scale,
+                    height: display.frame.height * scale
+                ).insetBy(dx: 2, dy: 2)
+                DisplayTile(display: display, canToggle: displays.count > 1)
+                    .frame(width: rect.width, height: rect.height)
+                    .offset(x: rect.minX, y: rect.minY)
+                    .onTapGesture { toggle(display) }
+            }
+        }
+        .frame(width: bounds.width * scale, height: bounds.height * scale, alignment: .topLeading)
+        .frame(maxWidth: .infinity)
+        .animation(.easeOut(duration: 0.15), value: displays)
+    }
+}
+
+private struct DisplayTile: View {
+    var display: DisplayInfo
+    var canToggle: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .top) {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(red: 0.55, green: 0.6, blue: 0.95), Color(red: 0.85, green: 0.5, blue: 0.6)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .saturation(display.on ? 1 : 0)
+                    .opacity(display.on ? 1 : 0.35)
+                if display.on {
+                    UnevenRoundedRectangle(bottomLeadingRadius: 4, bottomTrailingRadius: 4)
+                        .fill(.black)
+                        .frame(width: min(54, geo.size.width * 0.34), height: min(16, geo.size.height * 0.2))
+                } else if display.notch {
+                    UnevenRoundedRectangle(bottomLeadingRadius: 2, bottomTrailingRadius: 2)
+                        .fill(.black.opacity(0.6))
+                        .frame(width: min(24, geo.size.width * 0.16), height: 4)
+                }
+                VStack(spacing: 1) {
+                    Text(display.name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(display.on ? "On" : "Off")
+                        .font(.system(size: 10, weight: .medium))
+                        .opacity(0.8)
+                }
+                .foregroundStyle(display.on ? Color.white : Color.primary.opacity(0.7))
+                .shadow(color: .black.opacity(display.on ? 0.25 : 0), radius: 2, y: 1)
+                .padding(.horizontal, 6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.top, display.on ? min(16, geo.size.height * 0.2) : 0)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .strokeBorder(display.on ? Color.accentColor : Color.primary.opacity(hovering ? 0.35 : 0.18), lineWidth: display.on ? 2 : 1)
+        )
+        .scaleEffect(hovering && canToggle ? 1.02 : 1)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help(canToggle ? (display.on ? "Turn the island off on \(display.name)" : "Turn the island on on \(display.name)") : "")
+    }
+}
+
+/// One app icon style, picked like a display.
 private struct IconChoice: View {
     var style: AppIconStyle
     var selected: Bool

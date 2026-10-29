@@ -25,6 +25,8 @@ Jot is a small AppKit/SwiftUI app hosting a TipTap (ProseMirror) editor in a `WK
 | `App/Notifier.swift` | Rebuilds pending `UNNotificationRequest`s from scanned reminders. |
 | `App/Updater.swift` | Sparkle, only when the build has a real `SUPublicEDKey`. |
 | `Island/NotchController.swift` | The island: hover/drag detection, which display, expand/collapse, the due badge, routing notes between the store and the editor. |
+| `Island/HoverIntent.swift` | Tells reaching for the notch (resting, pushing up, clicking) apart from passing over it. |
+| `Island/Displays.swift` | Which displays the island is on, remembered by display UUID. |
 | `Island/NotchView.swift` | SwiftUI island shape and the due badge on the closed notch. |
 | `Island/TabBar.swift` | Tabs: sliding selection, drag to reorder, rename in place, due dots. |
 | `Editor/EditorBridge.swift` | The web view, the JS bridge, the `jot-asset://` scheme, Finder drops and screenshot paste. |
